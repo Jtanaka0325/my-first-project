@@ -66,13 +66,28 @@ export default function MenuAdminPage() {
         const img = new Image()
         img.onerror = reject
         img.onload = () => {
-          const MAX = 600
-          const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
-          const canvas = document.createElement('canvas')
-          canvas.width = Math.round(img.width * ratio)
-          canvas.height = Math.round(img.height * ratio)
-          canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
-          resolve(canvas.toDataURL('image/jpeg', 0.7))
+          // 段階的に圧縮してAPIの100KB制限以内に収める
+          const tryCompress = (maxPx: number, quality: number): string => {
+            const ratio = Math.min(maxPx / img.width, maxPx / img.height, 1)
+            const canvas = document.createElement('canvas')
+            canvas.width = Math.round(img.width * ratio)
+            canvas.height = Math.round(img.height * ratio)
+            canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+            return canvas.toDataURL('image/jpeg', quality)
+          }
+
+          // 400px → 300px → 200px と段階的に試みる
+          for (const [px, q] of [[400, 0.6], [300, 0.55], [200, 0.5]] as [number, number][]) {
+            const result = tryCompress(px, q)
+            // base64 -> バイト概算（base64は4文字=3バイト）
+            const bytes = (result.length * 3) / 4
+            if (bytes < 70000) { // 70KB以下なら採用
+              resolve(result)
+              return
+            }
+          }
+          // それでも大きければ最小サイズで強制的に解決
+          resolve(tryCompress(150, 0.5))
         }
         img.src = src
       }
@@ -121,6 +136,12 @@ export default function MenuAdminPage() {
       is_sold_out: editing.is_sold_out ?? false,
     }
 
+    // image_urlのサイズをログ
+    if (payload.image_url) {
+      const kb = Math.round((payload.image_url.length * 3) / 4 / 1024)
+      console.log(`image_url size: ~${kb}KB`)
+    }
+
     let error
     if (editing.id) {
       const result = await supabase.from('menu_items').update(payload).eq('id', editing.id)
@@ -137,6 +158,21 @@ export default function MenuAdminPage() {
       console.error('Save error:', error)
       setSaveError(`保存に失敗しました: ${error.message}`)
       return
+    }
+
+    // 保存できたかimage_urlを確認
+    if (pendingFile && payload.image_url) {
+      const { data: saved } = await supabase.from('menu_items')
+        .select('image_url')
+        .eq('name', editing.name!)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+      if (!saved?.image_url) {
+        setSaveError('写真の保存に失敗しました。Supabase StorageのSQLを実行してから再試行してください。')
+        setSaving(false)
+        return
+      }
     }
 
     setEditing(null)
