@@ -10,7 +10,11 @@ export default function MenuAdminPage() {
   const [filterCat, setFilterCat] = useState<string>('all')
   const [editing, setEditing] = useState<Partial<MenuItem> | null>(null)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [imageLoading, setImageLoading] = useState(false)
+  const [imageError, setImageError] = useState('')
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const fetchItems = async () => {
@@ -25,9 +29,35 @@ export default function MenuAdminPage() {
     fetchItems()
   }, [])
 
-  const [imageLoading, setImageLoading] = useState(false)
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageError('')
+    setPendingFile(file)
+    // プレビューだけ先に表示
+    const objectUrl = URL.createObjectURL(file)
+    setImagePreview(objectUrl)
+    e.target.value = ''
+  }
 
-  const compressImage = (file: File): Promise<string> =>
+  const uploadToStorage = async (file: File): Promise<string | null> => {
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
+    const path = `menu/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('menu-images')
+      .upload(path, file, { upsert: true, contentType: file.type })
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError)
+      return null
+    }
+
+    const { data } = supabase.storage.from('menu-images').getPublicUrl(path)
+    return data.publicUrl
+  }
+
+  const compressToBase64 = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onerror = reject
@@ -36,57 +66,82 @@ export default function MenuAdminPage() {
         const img = new Image()
         img.onerror = reject
         img.onload = () => {
-          const MAX = 640
+          const MAX = 600
           const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
           const canvas = document.createElement('canvas')
           canvas.width = Math.round(img.width * ratio)
           canvas.height = Math.round(img.height * ratio)
-          const ctx = canvas.getContext('2d')!
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-          resolve(canvas.toDataURL('image/jpeg', 0.72))
+          canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+          resolve(canvas.toDataURL('image/jpeg', 0.7))
         }
         img.src = src
       }
       reader.readAsDataURL(file)
     })
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setImageLoading(true)
-    try {
-      const dataUrl = await compressImage(file)
-      setImagePreview(dataUrl)
-      setEditing((prev) => prev ? { ...prev, image_url: dataUrl } : prev)
-    } catch {
-      alert('画像の読み込みに失敗しました。別の画像をお試しください。')
-    } finally {
-      setImageLoading(false)
-      // ファイル入力をリセット（同じファイルを再選択できるように）
-      e.target.value = ''
-    }
-  }
-
   const handleSave = async () => {
-    if (!editing?.name || !editing.category_id || editing.price === undefined) return
+    if (!editing?.name || !editing.category_id || editing.price === undefined) {
+      setSaveError('商品名・カテゴリ・価格は必須です')
+      return
+    }
     setSaving(true)
+    setSaveError('')
+    setImageError('')
+
+    let imageUrl = editing.image_url ?? null
+
+    // 新しい画像ファイルがある場合はアップロード
+    if (pendingFile) {
+      setImageLoading(true)
+
+      // まずStorageへのアップロードを試みる
+      const storageUrl = await uploadToStorage(pendingFile)
+
+      if (storageUrl) {
+        imageUrl = storageUrl
+      } else {
+        // Storageが使えない場合はBase64にフォールバック
+        try {
+          imageUrl = await compressToBase64(pendingFile)
+        } catch {
+          setImageError('画像の処理に失敗しました。写真なしで保存します。')
+          imageUrl = null
+        }
+      }
+
+      setImageLoading(false)
+    }
+
     const payload = {
       name: editing.name,
       description: editing.description ?? null,
       price: editing.price,
       category_id: editing.category_id,
-      image_url: editing.image_url ?? null,
+      image_url: imageUrl,
       is_sold_out: editing.is_sold_out ?? false,
     }
+
+    let error
     if (editing.id) {
-      await supabase.from('menu_items').update(payload).eq('id', editing.id)
+      const result = await supabase.from('menu_items').update(payload).eq('id', editing.id)
+      error = result.error
     } else {
       const maxOrder = Math.max(0, ...items.map(i => i.sort_order))
-      await supabase.from('menu_items').insert({ ...payload, sort_order: maxOrder + 1 })
+      const result = await supabase.from('menu_items').insert({ ...payload, sort_order: maxOrder + 1 })
+      error = result.error
     }
+
     setSaving(false)
+
+    if (error) {
+      console.error('Save error:', error)
+      setSaveError(`保存に失敗しました: ${error.message}`)
+      return
+    }
+
     setEditing(null)
     setImagePreview(null)
+    setPendingFile(null)
     fetchItems()
   }
 
@@ -101,6 +156,22 @@ export default function MenuAdminPage() {
     fetchItems()
   }
 
+  const openEdit = (item: MenuItem) => {
+    setEditing(item)
+    setImagePreview(item.image_url)
+    setPendingFile(null)
+    setSaveError('')
+    setImageError('')
+  }
+
+  const closeEdit = () => {
+    setEditing(null)
+    setImagePreview(null)
+    setPendingFile(null)
+    setSaveError('')
+    setImageError('')
+  }
+
   const filtered = filterCat === 'all' ? items : items.filter(i => i.category_id === filterCat)
 
   return (
@@ -111,7 +182,7 @@ export default function MenuAdminPage() {
           <h1 className="text-xl font-bold">🍽️ メニュー管理</h1>
         </div>
         <button
-          onClick={() => { setEditing({ name: '', price: 0, is_sold_out: false }); setImagePreview(null) }}
+          onClick={() => { setEditing({ name: '', price: 0, is_sold_out: false }); setImagePreview(null); setPendingFile(null); setSaveError(''); setImageError('') }}
           className="bg-white text-orange-500 font-bold px-4 py-2 rounded-xl text-sm"
         >
           ＋ 追加
@@ -139,6 +210,9 @@ export default function MenuAdminPage() {
 
       <div className="max-w-3xl mx-auto px-4 pb-8">
         <div className="grid sm:grid-cols-2 gap-3">
+          {filtered.length === 0 && (
+            <div className="col-span-2 text-center text-gray-400 py-12">メニューがありません</div>
+          )}
           {filtered.map(item => (
             <div key={item.id} className={`bg-white rounded-2xl shadow-sm overflow-hidden ${item.is_sold_out ? 'opacity-60' : ''}`}>
               {item.image_url ? (
@@ -162,7 +236,7 @@ export default function MenuAdminPage() {
                 </div>
                 <div className="flex gap-2 mt-2">
                   <Link href={`/admin/options?item=${item.id}`} className="flex-1 text-center text-xs bg-indigo-50 text-indigo-600 font-bold py-1.5 rounded-lg">オプション</Link>
-                  <button onClick={() => { setEditing(item); setImagePreview(item.image_url) }} className="flex-1 text-xs bg-gray-50 text-gray-600 font-bold py-1.5 rounded-lg">編集</button>
+                  <button onClick={() => openEdit(item)} className="flex-1 text-xs bg-gray-50 text-gray-600 font-bold py-1.5 rounded-lg">編集</button>
                   <button onClick={() => handleDelete(item.id)} className="text-xs text-red-400 font-bold py-1.5 px-2 rounded-lg">削除</button>
                 </div>
               </div>
@@ -174,45 +248,61 @@ export default function MenuAdminPage() {
       {/* 編集モーダル */}
       {editing && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl p-6 w-full max-w-md shadow-2xl max-h-screen overflow-y-auto">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl p-6 w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto">
             <h2 className="text-lg font-bold mb-4">{editing.id ? 'メニューを編集' : 'メニューを追加'}</h2>
 
-            {/* 画像 */}
+            {/* 画像アップロード */}
             <div
-              onClick={() => !imageLoading && fileRef.current?.click()}
-              className="w-full h-36 rounded-2xl mb-1 overflow-hidden cursor-pointer border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50 relative"
+              onClick={() => fileRef.current?.click()}
+              className="w-full h-40 rounded-2xl mb-1 overflow-hidden cursor-pointer border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50"
             >
-              {imageLoading ? (
-                <div className="flex flex-col items-center gap-2 text-gray-400">
-                  <div className="w-8 h-8 border-4 border-gray-300 border-t-orange-500 rounded-full animate-spin" />
-                  <span className="text-xs">圧縮中…</span>
-                </div>
-              ) : imagePreview ? (
+              {imagePreview ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={imagePreview} alt="" className="w-full h-full object-cover" />
               ) : (
-                <div className="flex flex-col items-center gap-1 text-gray-400">
-                  <span className="text-3xl">📷</span>
-                  <span className="text-sm">タップして写真を選択</span>
+                <div className="flex flex-col items-center gap-2 text-gray-400 select-none">
+                  <span className="text-4xl">📷</span>
+                  <span className="text-sm font-medium">タップして写真を選択</span>
+                  <span className="text-xs">JPG / PNG / HEIC 対応</span>
                 </div>
               )}
             </div>
-            {imagePreview && (
-              <button
-                onClick={() => { setImagePreview(null); setEditing(prev => prev ? { ...prev, image_url: null } : prev) }}
-                className="text-xs text-red-400 mb-3 hover:text-red-600"
-              >
-                ✕ 写真を削除
-              </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+
+            <div className="flex items-center justify-between mb-4 min-h-[20px]">
+              {pendingFile && (
+                <span className="text-xs text-green-600 font-medium">✓ {pendingFile.name}（保存時にアップロード）</span>
+              )}
+              {imagePreview && !pendingFile && <span className="text-xs text-gray-400">現在の写真</span>}
+              {!imagePreview && !pendingFile && <span />}
+              {imagePreview && (
+                <button
+                  onClick={() => { setImagePreview(null); setPendingFile(null); setEditing(p => p ? { ...p, image_url: null } : p) }}
+                  className="text-xs text-red-400 hover:text-red-600 font-bold ml-auto"
+                >
+                  ✕ 削除
+                </button>
+              )}
+            </div>
+
+            {imageError && (
+              <div className="bg-yellow-50 border border-yellow-300 text-yellow-800 text-xs rounded-xl px-3 py-2 mb-3">
+                ⚠️ {imageError}
+              </div>
             )}
-            {!imagePreview && <div className="mb-3" />}
-            <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/heic" className="hidden" onChange={handleFileChange} />
 
             <label className="block text-sm font-semibold text-gray-600 mb-1">商品名 *</label>
             <input
               value={editing.name ?? ''}
               onChange={(e) => setEditing({ ...editing, name: e.target.value })}
               className="w-full border-2 border-gray-200 rounded-xl px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-orange-400"
+              placeholder="例：和牛ステーキ"
             />
 
             <label className="block text-sm font-semibold text-gray-600 mb-1">価格（円）*</label>
@@ -235,7 +325,7 @@ export default function MenuAdminPage() {
             <select
               value={editing.category_id ?? ''}
               onChange={(e) => setEditing({ ...editing, category_id: e.target.value })}
-              className="w-full border-2 border-gray-200 rounded-xl px-3 py-2 mb-5 focus:outline-none focus:ring-2 focus:ring-orange-400"
+              className="w-full border-2 border-gray-200 rounded-xl px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-orange-400"
             >
               <option value="">選択してください</option>
               {categories.filter(c => !c.is_fixed).map(c => (
@@ -243,10 +333,22 @@ export default function MenuAdminPage() {
               ))}
             </select>
 
+            {saveError && (
+              <div className="bg-red-50 border border-red-300 text-red-700 text-sm rounded-xl px-3 py-2 mb-3">
+                ❌ {saveError}
+              </div>
+            )}
+
             <div className="flex gap-3">
-              <button onClick={() => { setEditing(null); setImagePreview(null) }} className="flex-1 border-2 border-gray-200 text-gray-600 font-bold py-3 rounded-xl">キャンセル</button>
-              <button onClick={handleSave} disabled={saving || imageLoading} className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-bold py-3 rounded-xl">
-                {imageLoading ? '画像処理中…' : saving ? '保存中…' : '保存'}
+              <button onClick={closeEdit} className="flex-1 border-2 border-gray-200 text-gray-600 font-bold py-3 rounded-xl">
+                キャンセル
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || imageLoading}
+                className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-bold py-3 rounded-xl"
+              >
+                {imageLoading ? '画像アップロード中…' : saving ? '保存中…' : '保存する'}
               </button>
             </div>
           </div>
