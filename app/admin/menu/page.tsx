@@ -25,29 +25,46 @@ export default function MenuAdminPage() {
     fetchItems()
   }, [])
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [imageLoading, setImageLoading] = useState(false)
+
+  const compressImage = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = reject
+      reader.onload = (ev) => {
+        const src = ev.target?.result as string
+        const img = new Image()
+        img.onerror = reject
+        img.onload = () => {
+          const MAX = 640
+          const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.round(img.width * ratio)
+          canvas.height = Math.round(img.height * ratio)
+          const ctx = canvas.getContext('2d')!
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+          resolve(canvas.toDataURL('image/jpeg', 0.72))
+        }
+        img.src = src
+      }
+      reader.readAsDataURL(file)
+    })
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    // 1MB以上は圧縮して保存
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const src = ev.target?.result as string
-      const img = new Image()
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        const MAX = 800
-        const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
-        canvas.width = img.width * ratio
-        canvas.height = img.height * ratio
-        const ctx = canvas.getContext('2d')!
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
-        setImagePreview(dataUrl)
-        setEditing((prev) => prev ? { ...prev, image_url: dataUrl } : prev)
-      }
-      img.src = src
+    setImageLoading(true)
+    try {
+      const dataUrl = await compressImage(file)
+      setImagePreview(dataUrl)
+      setEditing((prev) => prev ? { ...prev, image_url: dataUrl } : prev)
+    } catch {
+      alert('画像の読み込みに失敗しました。別の画像をお試しください。')
+    } finally {
+      setImageLoading(false)
+      // ファイル入力をリセット（同じファイルを再選択できるように）
+      e.target.value = ''
     }
-    reader.readAsDataURL(file)
   }
 
   const handleSave = async () => {
@@ -162,17 +179,34 @@ export default function MenuAdminPage() {
 
             {/* 画像 */}
             <div
-              onClick={() => fileRef.current?.click()}
-              className="w-full h-36 rounded-2xl mb-4 overflow-hidden cursor-pointer border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50"
+              onClick={() => !imageLoading && fileRef.current?.click()}
+              className="w-full h-36 rounded-2xl mb-1 overflow-hidden cursor-pointer border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50 relative"
             >
-              {imagePreview ? (
+              {imageLoading ? (
+                <div className="flex flex-col items-center gap-2 text-gray-400">
+                  <div className="w-8 h-8 border-4 border-gray-300 border-t-orange-500 rounded-full animate-spin" />
+                  <span className="text-xs">圧縮中…</span>
+                </div>
+              ) : imagePreview ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={imagePreview} alt="" className="w-full h-full object-cover" />
               ) : (
-                <span className="text-gray-400 text-sm">📷 タップして写真を選択</span>
+                <div className="flex flex-col items-center gap-1 text-gray-400">
+                  <span className="text-3xl">📷</span>
+                  <span className="text-sm">タップして写真を選択</span>
+                </div>
               )}
             </div>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
+            {imagePreview && (
+              <button
+                onClick={() => { setImagePreview(null); setEditing(prev => prev ? { ...prev, image_url: null } : prev) }}
+                className="text-xs text-red-400 mb-3 hover:text-red-600"
+              >
+                ✕ 写真を削除
+              </button>
+            )}
+            {!imagePreview && <div className="mb-3" />}
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/heic" className="hidden" onChange={handleFileChange} />
 
             <label className="block text-sm font-semibold text-gray-600 mb-1">商品名 *</label>
             <input
@@ -211,8 +245,8 @@ export default function MenuAdminPage() {
 
             <div className="flex gap-3">
               <button onClick={() => { setEditing(null); setImagePreview(null) }} className="flex-1 border-2 border-gray-200 text-gray-600 font-bold py-3 rounded-xl">キャンセル</button>
-              <button onClick={handleSave} disabled={saving} className="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl">
-                {saving ? '保存中…' : '保存'}
+              <button onClick={handleSave} disabled={saving || imageLoading} className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-bold py-3 rounded-xl">
+                {imageLoading ? '画像処理中…' : saving ? '保存中…' : '保存'}
               </button>
             </div>
           </div>
