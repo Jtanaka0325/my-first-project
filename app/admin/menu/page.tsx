@@ -25,22 +25,29 @@ export default function MenuAdminPage() {
     fetchItems()
   }, [])
 
-  const handleImageUpload = async (file: File) => {
-    const ext = file.name.split('.').pop()
-    const path = `menu/${Date.now()}.${ext}`
-    const { error } = await supabase.storage.from('menu-images').upload(path, file)
-    if (error) return null
-    const { data } = supabase.storage.from('menu-images').getPublicUrl(path)
-    return data.publicUrl
-  }
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const preview = URL.createObjectURL(file)
-    setImagePreview(preview)
-    const url = await handleImageUpload(file)
-    if (url) setEditing((prev) => prev ? { ...prev, image_url: url } : prev)
+    // 1MB以上は圧縮して保存
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const src = ev.target?.result as string
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const MAX = 800
+        const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
+        canvas.width = img.width * ratio
+        canvas.height = img.height * ratio
+        const ctx = canvas.getContext('2d')!
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+        setImagePreview(dataUrl)
+        setEditing((prev) => prev ? { ...prev, image_url: dataUrl } : prev)
+      }
+      img.src = src
+    }
+    reader.readAsDataURL(file)
   }
 
   const handleSave = async () => {

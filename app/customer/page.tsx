@@ -6,6 +6,8 @@ import Link from 'next/link'
 import { supabase, Category } from '@/lib/supabase'
 import { useCartStore } from '@/lib/cart-store'
 
+const isImageIcon = (icon?: string) => icon?.startsWith('data:') || icon?.startsWith('http')
+
 function CategoryGrid() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -43,7 +45,12 @@ function CategoryGrid() {
                 className="flex flex-col items-center justify-center gap-2 rounded-2xl p-6 text-white shadow-md active:scale-95 transition-transform"
                 style={{ backgroundColor: cat.color }}
               >
-                <span className="text-4xl">{cat.icon}</span>
+                {isImageIcon(cat.icon) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={cat.icon} alt="" className="w-12 h-12 rounded-xl object-cover" />
+                ) : (
+                  <span className="text-4xl">{cat.icon}</span>
+                )}
                 <span className="font-bold text-sm text-center leading-tight">{cat.name}</span>
               </Link>
             ) : (
@@ -53,7 +60,12 @@ function CategoryGrid() {
                 className="flex flex-col items-center justify-center gap-2 rounded-2xl p-6 text-white shadow-md active:scale-95 transition-transform"
                 style={{ backgroundColor: cat.color }}
               >
-                <span className="text-4xl">{cat.icon}</span>
+                {isImageIcon(cat.icon) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={cat.icon} alt="" className="w-12 h-12 rounded-xl object-cover" />
+                ) : (
+                  <span className="text-4xl">{cat.icon}</span>
+                )}
                 <span className="font-bold text-sm text-center leading-tight">{cat.name}</span>
               </Link>
             )
