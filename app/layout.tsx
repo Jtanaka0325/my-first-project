@@ -1,15 +1,14 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
-import SwRegister from './sw-register'
 
 export const metadata: Metadata = {
-  title: 'MenuVoice',
+  title: 'MenuVoice（メニューボイス）',
   description: '飲食店総合注文・環境フィードバックシステム',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'MenuVoice',
+    title: 'MenuVoice（メニューボイス）',
   },
 }
 
@@ -26,8 +25,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+            caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+          }
+        ` }} />
+      </head>
       <body className="min-h-screen">
-        <SwRegister />
         {children}
       </body>
     </html>
