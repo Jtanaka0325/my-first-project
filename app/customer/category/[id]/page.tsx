@@ -46,10 +46,20 @@ function MenuList() {
             <div className="relative">
               {item.image_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.image_url} alt={item.name} className="w-full h-32 object-cover" />
-              ) : (
-                <div className="w-full h-32 bg-gray-100 flex items-center justify-center text-4xl">🍽️</div>
-              )}
+                <img
+                  src={item.image_url}
+                  alt={item.name}
+                  className="w-full h-32 object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                    e.currentTarget.nextElementSibling?.removeAttribute('style')
+                  }}
+                />
+              ) : null}
+              <div
+                className="w-full h-32 bg-gray-100 flex items-center justify-center text-4xl"
+                style={item.image_url ? { display: 'none' } : undefined}
+              >🍽️</div>
               {item.is_sold_out && (
                 <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                   <span className="bg-black/60 text-white text-sm font-bold px-3 py-1 rounded-full">売り切れ</span>

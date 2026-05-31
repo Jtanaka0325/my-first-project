@@ -56,10 +56,20 @@ function ItemDetail() {
 
       {item.image_url ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={item.image_url} alt={item.name} className="w-full h-52 object-cover" />
-      ) : (
-        <div className="w-full h-52 bg-gray-200 flex items-center justify-center text-7xl">🍽️</div>
-      )}
+        <img
+          src={item.image_url}
+          alt={item.name}
+          className="w-full h-52 object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+            e.currentTarget.nextElementSibling?.removeAttribute('style')
+          }}
+        />
+      ) : null}
+      <div
+        className="w-full h-52 bg-gray-200 flex items-center justify-center text-7xl"
+        style={item.image_url ? { display: 'none' } : undefined}
+      >🍽️</div>
 
       <div className="p-4 max-w-lg mx-auto">
         <h2 className="text-2xl font-bold text-gray-800">{item.name}</h2>

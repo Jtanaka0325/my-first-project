@@ -173,6 +173,18 @@ export default function MenuAdminPage() {
     fetchItems()
   }
 
+  // DBに残っているSupabase Storage URL（http〜）を全てnullにクリア
+  const clearStorageUrls = async () => {
+    if (!confirm('Supabase StorageのURLが保存されている写真をすべてクリアします。\n写真は再登録が必要です。続けますか？')) return
+    const storageItems = items.filter(i => i.image_url && !i.image_url.startsWith('data:'))
+    if (storageItems.length === 0) { alert('クリア対象の写真はありません。'); return }
+    await Promise.all(
+      storageItems.map(i => supabase.from('menu_items').update({ image_url: null }).eq('id', i.id))
+    )
+    alert(`${storageItems.length}件の写真URLをクリアしました。写真を再登録してください。`)
+    fetchItems()
+  }
+
   const filtered = filterCat === 'all' ? items : items.filter(i => i.category_id === filterCat)
 
   return (
@@ -182,9 +194,20 @@ export default function MenuAdminPage() {
           <Link href="/" className="text-white text-xl">←</Link>
           <h1 className="text-xl font-bold">🍽️ メニュー管理</h1>
         </div>
-        <button onClick={openNew} className="bg-white text-orange-500 font-bold px-4 py-2 rounded-xl text-sm">
-          ＋ 追加
-        </button>
+        <div className="flex gap-2">
+          {items.some(i => i.image_url && !i.image_url.startsWith('data:')) && (
+            <button
+              onClick={clearStorageUrls}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-2 rounded-xl text-xs"
+              title="古いStorage URLをクリア"
+            >
+              🗑️ 古い写真URL
+            </button>
+          )}
+          <button onClick={openNew} className="bg-white text-orange-500 font-bold px-4 py-2 rounded-xl text-sm">
+            ＋ 追加
+          </button>
+        </div>
       </div>
 
       {/* カテゴリフィルター */}
@@ -216,10 +239,20 @@ export default function MenuAdminPage() {
             <div key={item.id} className={`bg-white rounded-2xl shadow-sm overflow-hidden ${item.is_sold_out ? 'opacity-60' : ''}`}>
               {item.image_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.image_url} alt={item.name} className="w-full h-36 object-cover" />
-              ) : (
-                <div className="w-full h-36 bg-gray-100 flex items-center justify-center text-5xl">🍽️</div>
-              )}
+                <img
+                  src={item.image_url}
+                  alt={item.name}
+                  className="w-full h-36 object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                    e.currentTarget.nextElementSibling?.removeAttribute('style')
+                  }}
+                />
+              ) : null}
+              <div
+                className="w-full h-36 bg-gray-100 flex items-center justify-center text-5xl"
+                style={item.image_url ? { display: 'none' } : undefined}
+              >🍽️</div>
               <div className="p-3">
                 <div className="flex items-start justify-between gap-1">
                   <div className="flex-1">
