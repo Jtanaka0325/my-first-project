@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { supabase, Category, MenuItem } from '@/lib/supabase'
 
-// 画像をBase64に変換（サイズ段階的削減）
 function toBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -14,14 +13,16 @@ function toBase64(file: File): Promise<string> {
       const img = new Image()
       img.onerror = () => reject(new Error('画像デコード失敗'))
       img.onload = () => {
-        // 300px以内・品質0.65 → 約15〜40KB のJPEG
-        const MAX = 300
+        const MAX = 320
         const r = Math.min(MAX / img.width, MAX / img.height, 1)
         const c = document.createElement('canvas')
         c.width = Math.round(img.width * r)
         c.height = Math.round(img.height * r)
         c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height)
-        resolve(c.toDataURL('image/jpeg', 0.65))
+        const data = c.toDataURL('image/jpeg', 0.65)
+        const kb = Math.round((data.length * 3) / 4 / 1024)
+        console.log(`[MenuVoice] 画像変換完了: ${c.width}x${c.height}px, 約${kb}KB`)
+        resolve(data)
       }
       img.src = src
     }
@@ -33,14 +34,20 @@ export default function MenuAdminPage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [items, setItems] = useState<MenuItem[]>([])
   const [filterCat, setFilterCat] = useState<string>('all')
-  const [editing, setEditing] = useState<Partial<MenuItem> | null>(null)
+
+  // 編集中のメニュー情報（image_urlは含まない）
+  const [editing, setEditing] = useState<Omit<Partial<MenuItem>, 'image_url'> | null>(null)
+  // 画像データは専用stateで管理（確実に最新値を保持するため）
+  const [imageData, setImageData] = useState<string | null>(null)
+
   const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState('')
   const [converting, setConverting] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const fetchItems = async () => {
-    const { data } = await supabase.from('menu_items').select('*').order('sort_order')
+    const { data, error } = await supabase.from('menu_items').select('*').order('sort_order')
+    if (error) console.error('[MenuVoice] fetchItems error:', error)
     if (data) setItems(data as MenuItem[])
   }
 
@@ -50,7 +57,25 @@ export default function MenuAdminPage() {
     fetchItems()
   }, [])
 
-  // ファイル選択 → 即座にBase64変換してeditingに保存
+  const openNew = () => {
+    setEditing({ name: '', price: 0, is_sold_out: false })
+    setImageData(null)
+    setSaveError('')
+  }
+
+  const openEdit = (item: MenuItem) => {
+    const { image_url, ...rest } = item
+    setEditing(rest)
+    setImageData(image_url ?? null)
+    setSaveError('')
+  }
+
+  const closeEdit = () => {
+    setEditing(null)
+    setImageData(null)
+    setSaveError('')
+  }
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -58,10 +83,10 @@ export default function MenuAdminPage() {
     setConverting(true)
     setSaveError('')
     try {
-      const base64 = await toBase64(file)
-      setEditing((prev) => prev ? { ...prev, image_url: base64 } : prev)
+      const b64 = await toBase64(file)
+      setImageData(b64)  // editingとは独立したstateに保存
     } catch (err) {
-      setSaveError(`画像変換失敗: ${err instanceof Error ? err.message : '不明なエラー'}`)
+      setSaveError(`変換失敗: ${err instanceof Error ? err.message : '不明'}`)
     } finally {
       setConverting(false)
     }
@@ -75,33 +100,65 @@ export default function MenuAdminPage() {
     setSaving(true)
     setSaveError('')
 
+    // imageDataの状態を明示的にログ
+    console.log(`[MenuVoice] 保存開始 id=${editing.id ?? 'NEW'} imageData=${imageData ? `${imageData.slice(0, 30)}... (${Math.round(imageData.length / 1024)}KB)` : 'null'}`)
+
     const payload = {
       name: editing.name,
       description: editing.description ?? null,
       price: editing.price,
       category_id: editing.category_id,
-      image_url: editing.image_url ?? null,
+      image_url: imageData,  // 専用stateから直接セット
       is_sold_out: editing.is_sold_out ?? false,
     }
 
-    let dbError
+    let savedId: string | undefined = editing.id
+
     if (editing.id) {
-      const { error } = await supabase.from('menu_items').update(payload).eq('id', editing.id)
-      dbError = error
+      const { error } = await supabase
+        .from('menu_items')
+        .update(payload)
+        .eq('id', editing.id)
+      if (error) {
+        console.error('[MenuVoice] update error:', error)
+        setSaveError(`保存失敗: ${error.message}`)
+        setSaving(false)
+        return
+      }
     } else {
       const maxOrder = Math.max(0, ...items.map(i => i.sort_order))
-      const { error } = await supabase.from('menu_items').insert({ ...payload, sort_order: maxOrder + 1 })
-      dbError = error
+      const { data, error } = await supabase
+        .from('menu_items')
+        .insert({ ...payload, sort_order: maxOrder + 1 })
+        .select('id')
+        .single()
+      if (error || !data) {
+        console.error('[MenuVoice] insert error:', error)
+        setSaveError(`保存失敗: ${error?.message ?? '不明'}`)
+        setSaving(false)
+        return
+      }
+      savedId = data.id
+    }
+
+    // 保存後にDBから読み返して確認
+    if (imageData && savedId) {
+      const { data: verify } = await supabase
+        .from('menu_items')
+        .select('image_url')
+        .eq('id', savedId)
+        .single()
+      const saved = verify?.image_url
+      console.log(`[MenuVoice] 保存確認: image_url=${saved ? `${saved.slice(0, 30)}... (${Math.round(saved.length / 1024)}KB)` : 'null'}`)
+      if (!saved) {
+        setSaveError('写真のDB保存に失敗しました。ブラウザの開発者コンソールを確認してください。')
+        setSaving(false)
+        return
+      }
     }
 
     setSaving(false)
-
-    if (dbError) {
-      setSaveError(`保存失敗: ${dbError.message}`)
-      return
-    }
-
-    setEditing(null)
+    closeEdit()
     fetchItems()
   }
 
@@ -125,10 +182,7 @@ export default function MenuAdminPage() {
           <Link href="/" className="text-white text-xl">←</Link>
           <h1 className="text-xl font-bold">🍽️ メニュー管理</h1>
         </div>
-        <button
-          onClick={() => { setEditing({ name: '', price: 0, is_sold_out: false }); setSaveError('') }}
-          className="bg-white text-orange-500 font-bold px-4 py-2 rounded-xl text-sm"
-        >
+        <button onClick={openNew} className="bg-white text-orange-500 font-bold px-4 py-2 rounded-xl text-sm">
           ＋ 追加
         </button>
       </div>
@@ -137,7 +191,7 @@ export default function MenuAdminPage() {
       <div className="px-4 py-3 flex gap-2 overflow-x-auto max-w-3xl mx-auto">
         <button
           onClick={() => setFilterCat('all')}
-          className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-bold transition-colors ${filterCat === 'all' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600'}`}
+          className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-bold ${filterCat === 'all' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600'}`}
         >
           すべて
         </button>
@@ -145,7 +199,7 @@ export default function MenuAdminPage() {
           <button
             key={cat.id}
             onClick={() => setFilterCat(cat.id)}
-            className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-bold transition-colors ${filterCat === cat.id ? 'bg-orange-500 text-white' : 'bg-white text-gray-600'}`}
+            className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-bold ${filterCat === cat.id ? 'bg-orange-500 text-white' : 'bg-white text-gray-600'}`}
           >
             {cat.icon} {cat.name}
           </button>
@@ -181,12 +235,7 @@ export default function MenuAdminPage() {
                 </div>
                 <div className="flex gap-2 mt-2">
                   <Link href={`/admin/options?item=${item.id}`} className="flex-1 text-center text-xs bg-indigo-50 text-indigo-600 font-bold py-1.5 rounded-lg">オプション</Link>
-                  <button
-                    onClick={() => { setEditing(item); setSaveError('') }}
-                    className="flex-1 text-xs bg-gray-50 text-gray-600 font-bold py-1.5 rounded-lg"
-                  >
-                    編集
-                  </button>
+                  <button onClick={() => openEdit(item)} className="flex-1 text-xs bg-gray-50 text-gray-600 font-bold py-1.5 rounded-lg">編集</button>
                   <button onClick={() => handleDelete(item.id)} className="text-xs text-red-400 font-bold py-1.5 px-2 rounded-lg">削除</button>
                 </div>
               </div>
@@ -204,21 +253,16 @@ export default function MenuAdminPage() {
             {/* 写真エリア */}
             <div
               onClick={() => !converting && fileRef.current?.click()}
-              className="w-full h-40 rounded-2xl mb-3 overflow-hidden cursor-pointer border-2 border-dashed border-gray-200 bg-gray-50 flex items-center justify-center relative"
+              className="w-full h-40 rounded-2xl mb-2 overflow-hidden cursor-pointer border-2 border-dashed border-gray-200 bg-gray-50 flex items-center justify-center"
             >
               {converting ? (
                 <div className="flex flex-col items-center gap-2 text-gray-400">
                   <div className="w-8 h-8 border-4 border-gray-200 border-t-orange-500 rounded-full animate-spin" />
                   <span className="text-xs font-medium">変換中…</span>
                 </div>
-              ) : editing.image_url ? (
-                <>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={editing.image_url} alt="" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-colors flex items-center justify-center">
-                    <span className="opacity-0 hover:opacity-100 text-white text-xs font-bold bg-black/50 px-3 py-1 rounded-full">変更</span>
-                  </div>
-                </>
+              ) : imageData ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={imageData} alt="" className="w-full h-full object-cover" />
               ) : (
                 <div className="flex flex-col items-center gap-2 text-gray-400 select-none">
                   <span className="text-4xl">📷</span>
@@ -228,14 +272,21 @@ export default function MenuAdminPage() {
               )}
             </div>
 
-            {editing.image_url && (
-              <button
-                onClick={() => setEditing(p => p ? { ...p, image_url: null } : p)}
-                className="text-xs text-red-400 hover:text-red-600 font-bold mb-3 block"
-              >
-                ✕ 写真を削除
-              </button>
-            )}
+            <div className="flex items-center justify-between mb-3 min-h-5">
+              {imageData && (
+                <>
+                  <span className="text-xs text-green-600 font-medium">
+                    ✓ 写真あり（約{Math.round(imageData.length / 1024)}KB）
+                  </span>
+                  <button
+                    onClick={() => setImageData(null)}
+                    className="text-xs text-red-400 hover:text-red-600 font-bold"
+                  >
+                    ✕ 削除
+                  </button>
+                </>
+              )}
+            </div>
 
             <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
 
@@ -282,10 +333,7 @@ export default function MenuAdminPage() {
             )}
 
             <div className="flex gap-3">
-              <button
-                onClick={() => { setEditing(null); setSaveError('') }}
-                className="flex-1 border-2 border-gray-200 text-gray-600 font-bold py-3 rounded-xl"
-              >
+              <button onClick={closeEdit} className="flex-1 border-2 border-gray-200 text-gray-600 font-bold py-3 rounded-xl">
                 キャンセル
               </button>
               <button
