@@ -30,7 +30,7 @@ function CategoryGrid() {
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
       <div className="bg-orange-500 text-white px-4 py-5 text-center shadow-md">
-        <h1 className="text-2xl font-bold">🍽️ メニュー</h1>
+        <h1 className="text-2xl font-bold">💬 MenuVoice</h1>
         <p className="text-orange-100 text-sm mt-0.5">{tableNumber}番テーブル</p>
       </div>
 

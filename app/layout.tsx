@@ -3,13 +3,13 @@ import './globals.css'
 import SwRegister from './sw-register'
 
 export const metadata: Metadata = {
-  title: 'こえレポ',
-  description: '飲食店リアルタイム環境フィードバックシステム',
+  title: 'MenuVoice',
+  description: '飲食店総合注文・環境フィードバックシステム',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'こえレポ',
+    title: 'MenuVoice',
   },
 }
 

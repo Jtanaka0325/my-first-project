@@ -95,7 +95,7 @@ export default function QRPage() {
               pageBreakInside: 'avoid',
             }}
           >
-            <p style={{ fontSize: '14px', fontWeight: 'bold', color: '#666' }}>こえレポ</p>
+            <p style={{ fontSize: '14px', fontWeight: 'bold', color: '#f97316' }}>💬 MenuVoice</p>
             <QRCodeSVG value={`${appUrl}/customer?table=${num}`} size={150} level="M" includeMargin />
             <p style={{ fontSize: '18px', fontWeight: 'bold' }}>{num}番テーブル</p>
             <p style={{ fontSize: '10px', color: '#999' }}>ご意見をお聞かせください</p>
